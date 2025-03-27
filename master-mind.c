@@ -23,7 +23,7 @@
 #include <signal.h>
 
 #include "lcdBinary.h"
-
+#include <ctype.h>
 
 /* --------------------------------------------------------------------------- */
 /* Config settings */
@@ -145,6 +145,13 @@ int failure(int fatal, const char *message, ...);
 void waitForEnter(void);
 void waitForButton(uint32_t *gpio, int button);
 void cleanupResources(void);
+void acknowledgeInput(uint32_t *gpio, int redLED);
+void echoInput(uint32_t *gpio, int greenLED, int count);
+void signalEndOfInput(uint32_t *gpio, int redLED);
+void displayMatchResults(uint32_t *gpio, int greenLED, int redLED, int exact, int approx);
+void signalNewRound(uint32_t *gpio, int redLED);
+void displaySuccess(uint32_t *gpio, int greenLED, int redLED);
+void displaySurnameGreeting(uint32_t *gpio, int redLED, int greenLED, const char *surname, struct lcdDataStruct *lcd);
 
 
 /* ======================================================= */
@@ -631,6 +638,129 @@ void blinkN(uint32_t *gpio, int led, int c)
     }
 }
 
+/* Blink red LED once to acknowledge input */
+void acknowledgeInput(uint32_t *gpio, int redLED) {
+    writeLED(gpio, redLED, HIGH);
+    delay(DELAY);
+    writeLED(gpio, redLED, LOW);
+}
+
+/* Blink green LED n times to echo input value */
+void echoInput(uint32_t *gpio, int greenLED, int count) {
+    for (int i = 0; i < count; i++) {
+        writeLED(gpio, greenLED, HIGH);
+        delay(DELAY);
+        writeLED(gpio, greenLED, LOW);
+        delay(DELAY/2); // Shorter delay between blinks
+    }
+}
+
+/* Blink red LED twice to indicate end of input */
+void signalEndOfInput(uint32_t *gpio, int redLED) {
+    for (int i = 0; i < 2; i++) {
+        writeLED(gpio, redLED, HIGH);
+        delay(DELAY);
+        writeLED(gpio, redLED, LOW);
+        delay(DELAY);
+    }
+}
+
+/* Display match results with LED pattern */
+void displayMatchResults(uint32_t *gpio, int greenLED, int redLED, int exact, int approx) {
+    // Blink green LED for exact matches
+    for (int i = 0; i < exact; i++) {
+        writeLED(gpio, greenLED, HIGH);
+        delay(DELAY);
+        writeLED(gpio, greenLED, LOW);
+        delay(DELAY/2);
+    }
+    
+    // Red LED separator
+    delay(DELAY);
+    writeLED(gpio, redLED, HIGH);
+    delay(DELAY);
+    writeLED(gpio, redLED, LOW);
+    delay(DELAY);
+    
+    // Blink green LED for approximate matches
+    for (int i = 0; i < approx; i++) {
+        writeLED(gpio, greenLED, HIGH);
+        delay(DELAY);
+        writeLED(gpio, greenLED, LOW);
+        delay(DELAY/2);
+    }
+}
+
+/* Blink red LED three times to indicate new round */
+void signalNewRound(uint32_t *gpio, int redLED) {
+    for (int i = 0; i < 3; i++) {
+        writeLED(gpio, redLED, HIGH);
+        delay(DELAY);
+        writeLED(gpio, redLED, LOW);
+        delay(DELAY);
+    }
+}
+
+/* Success pattern: green LED blinks three times while red LED is on */
+void displaySuccess(uint32_t *gpio, int greenLED, int redLED) {
+    writeLED(gpio, redLED, HIGH);
+    for (int i = 0; i < 3; i++) {
+        writeLED(gpio, greenLED, HIGH);
+        delay(DELAY);
+        writeLED(gpio, greenLED, LOW);
+        delay(DELAY);
+    }
+    writeLED(gpio, redLED, LOW);
+}
+
+/* Surname-based greeting function */
+void displaySurnameGreeting(uint32_t *gpio, int redLED, int greenLED, const char *surname, struct lcdDataStruct *lcd) {
+    int len = strlen(surname);
+    
+    // Display surname on LCD
+    lcdClear(lcd);
+    lcdPuts(lcd, "Hello");
+    lcdPosition(lcd, 0, 1);
+    lcdPuts(lcd, surname);
+    delay(2000);
+    
+    // Turn off both LEDs initially
+    writeLED(gpio, redLED, LOW);
+    writeLED(gpio, greenLED, LOW);
+    delay(DELAY);
+    
+    // Blink LEDs based on surname
+    for (int i = 0; i < len; i++) {
+        char c = tolower(surname[i]);
+        // Check if vowel (a, e, i, o, u)
+        if (c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u') {
+            // Blink green LED for vowel
+            writeLED(gpio, greenLED, HIGH);
+            delay(DELAY);
+            writeLED(gpio, greenLED, LOW);
+        } else if (c >= 'a' && c <= 'z') {
+            // Blink red LED for consonant (only for letters)
+            writeLED(gpio, redLED, HIGH);
+            delay(DELAY);
+            writeLED(gpio, redLED, LOW);
+        }
+        delay(DELAY/2);
+    }
+    
+    // Final confirmation pattern
+    for (int i = 0; i < 2; i++) {
+        writeLED(gpio, greenLED, HIGH);
+        writeLED(gpio, redLED, HIGH);
+        delay(DELAY);
+        writeLED(gpio, greenLED, LOW);
+        writeLED(gpio, redLED, LOW);
+        delay(DELAY);
+    }
+    
+    // Clear LCD for next message
+    delay(1000);
+}
+
 /* ======================================================= */
 /* SECTION: main fct                                       */
 /* ------------------------------------------------------- */
@@ -887,6 +1017,8 @@ int main(int argc, char *argv[])
     delay(2000);
     lcdClear(lcd);
     
+    displaySurnameGreeting(gpio, pin2LED2, pinLED, "Dsouza & Ahmed", lcd);
+
     /* initialise the secret sequence */
     if (!opt_s)
         initSeq();
@@ -920,7 +1052,7 @@ int main(int argc, char *argv[])
         lcdPuts(lcd, buf);
         delay(2000);
         
-        // Get input for each position in the sequence
+    // Get input for each position in the sequence
 for (i = 0; i < seqlen; i++) {
     lcdClear(lcd);
     lcdPuts(lcd, "Position ");
@@ -929,25 +1061,28 @@ for (i = 0; i < seqlen; i++) {
     lcdPosition(lcd, 0, 1);
     lcdPuts(lcd, "Press button");
     
-    // Use the new function to get input
-    // Parameters: gpio, button pin, max value (colors), timeout, confirmation method (2 = double press)
+    // Use the improved function to get input
     int selectedValue = getButtonInput(gpio, pinButton, colors, INPUT_TIMEOUT, 2);
     
-    // Visual feedback for the selected value
-    writeLED(gpio, pinLED, HIGH);
-    delay(200);
-    writeLED(gpio, pinLED, LOW);
+    // Acknowledge input with red LED
+    acknowledgeInput(gpio, pin2LED2);
+    
+    // Echo input with green LED
+    echoInput(gpio, pinLED, selectedValue);
     
     // Store the value
     attSeq[i] = selectedValue;
     
-    // Show the selected value
+    // Show the selected value on LCD
     lcdClear(lcd);
     lcdPuts(lcd, "Position ");
     sprintf(buf, "%d: %d", i + 1, attSeq[i]);
     lcdPuts(lcd, buf);
     delay(1000);
 }
+
+// Signal end of input sequence
+signalEndOfInput(gpio, pin2LED2);
         
         // Display the entered sequence
         if (debug) {
@@ -956,79 +1091,73 @@ for (i = 0; i < seqlen; i++) {
         }
         
         // Calculate matches
-        code = countMatches(theSeq, attSeq);
-        exact = code / 10;
-        contained = code % 10;
-        
-        // Display result on LCD
-        lcdClear(lcd);
-        lcdPosition(lcd, 0, 0);
-        sprintf(buf, "Exact: %d", exact);
-        lcdPuts(lcd, buf);
-        lcdPosition(lcd, 0, 1);
-        sprintf(buf, "Approx: %d", contained);
-        lcdPuts(lcd, buf);
-        
-        // Visual feedback for results
-        delay(1000);
-        blinkN(gpio, pinLED, exact);    // Blink green LED for exact matches
-        delay(500);
-        blinkN(gpio, pin2LED2, contained); // Blink red LED for approximate matches
-        
-        // Check if the sequence is found
-        if (exact == seqlen) {
-            found = 1;
-        } else {
-            // Wait for button press to continue
-            delay(2000);
-            lcdPosition(lcd, 10, 1);
-            lcdPuts(lcd, "Next?");
-            waitForButton(gpio, pinButton);
-            attempts++;
-        }
+code = countMatches(theSeq, attSeq);
+exact = code / 10;
+contained = code % 10;
+
+// Display result on LCD
+lcdClear(lcd);
+lcdPosition(lcd, 0, 0);
+sprintf(buf, "Exact: %d", exact);
+lcdPuts(lcd, buf);
+lcdPosition(lcd, 0, 1);
+sprintf(buf, "Approx: %d", contained);
+lcdPuts(lcd, buf);
+
+// Display match results with LED pattern
+displayMatchResults(gpio, pinLED, pin2LED2, exact, contained);
+
+// Check if the sequence is found
+if (exact == seqlen) {
+    found = 1;
+    
+    // Display success pattern
+    displaySuccess(gpio, pinLED, pin2LED2);
+} else {
+    // Wait for button press to continue
+    delay(2000);
+    lcdPosition(lcd, 10, 1);
+    lcdPuts(lcd, "Next?");
+    waitForButton(gpio, pinButton);
+    attempts++;
+    
+    // Signal start of new round
+    signalNewRound(gpio, pin2LED2);
+    }
     }
     
-    // Game over - display result
-    if (found) {
-        lcdClear(lcd);
-        lcdPosition(lcd, 0, 0);
-        lcdPuts(lcd, "Congratulations!");
-        lcdPosition(lcd, 0, 1);
-        sprintf(buf, "Solved in %d try", attempts + 1);
-        lcdPuts(lcd, buf);
-        
-        // Celebration pattern
-        for (i = 0; i < 5; i++) {
-            writeLED(gpio, pinLED, HIGH);
-            writeLED(gpio, pin2LED2, LOW);
-            delay(DELAY);
-            writeLED(gpio, pinLED, LOW);
-            writeLED(gpio, pin2LED2, HIGH);
-            delay(DELAY);
-        }
-        writeLED(gpio, pinLED, LOW);
-        writeLED(gpio, pin2LED2, LOW);
-    } else {
-        lcdClear(lcd);
-        lcdPosition(lcd, 0, 0);
-        lcdPuts(lcd, "Game Over!");
-        lcdPosition(lcd, 0, 1);
-        lcdPuts(lcd, "Secret was:");
-        
-        // Show the secret sequence
-        if (debug) {
-            printf("Secret: ");
-            showSeq(theSeq);
-        }
-        
-        // Failure pattern
-        for (i = 0; i < 3; i++) {
-            writeLED(gpio, pin2LED2, HIGH);
-            delay(DELAY*2);
-            writeLED(gpio, pin2LED2, LOW);
-            delay(DELAY);
-        }
+// Game over - display result
+if (found) {
+    lcdClear(lcd);
+    lcdPosition(lcd, 0, 0);
+    lcdPuts(lcd, "SUCCESS!");
+    lcdPosition(lcd, 0, 1);
+    sprintf(buf, "Solved in %d try", attempts + 1);
+    lcdPuts(lcd, buf);
+    
+    // Display success pattern again
+    displaySuccess(gpio, pinLED, pin2LED2);
+} else {
+    lcdClear(lcd);
+    lcdPosition(lcd, 0, 0);
+    lcdPuts(lcd, "Game Over!");
+    lcdPosition(lcd, 0, 1);
+    lcdPuts(lcd, "Secret was:");
+    
+    // Show the secret sequence
+    if (debug) {
+        printf("Secret: ");
+        showSeq(theSeq);
     }
+    
+    // Failure pattern
+    for (i = 0; i < 3; i++) {
+        writeLED(gpio, pin2LED2, HIGH);
+        delay(DELAY*2);
+        writeLED(gpio, pin2LED2, LOW);
+        delay(DELAY);
+    }
+}
     
     // Clean up and exit
     free(lcd);
