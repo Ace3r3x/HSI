@@ -99,6 +99,153 @@ int readButton(uint32_t *gpio, int button)
     return result;
 }
 
+int detectButtonPress(uint32_t *gpio, int button)
+{
+    static int prevState = LOW;
+    int currState = readButton(gpio, button);
+    struct timespec sleeper, dummy;
+    
+    /* If button state changed from not pressed to pressed */
+    if (currState == HIGH && prevState == LOW) {
+        /* Debounce delay */
+        sleeper.tv_sec = 0;
+        sleeper.tv_nsec = 50 * 1000000; /* 50ms */
+        nanosleep(&sleeper, &dummy);
+        
+        /* Check if button is still pressed */
+        currState = readButton(gpio, button);
+        if (currState == HIGH) {
+            prevState = HIGH;
+            return 1; /* Button press detected */
+        }
+    } else if (currState == LOW && prevState == HIGH) {
+        /* Button was released */
+        prevState = LOW;
+    }
+    
+    return 0; /* No new button press */
+}
+
+/* 
+ * Detect a button release with debouncing
+ * Returns 1 if a new release is detected, 0 otherwise
+ */
+int detectButtonRelease(uint32_t *gpio, int button)
+{
+    static int prevState = HIGH;
+    int currState = readButton(gpio, button);
+    struct timespec sleeper, dummy;
+    
+    /* If button state changed from pressed to not pressed */
+    if (currState == LOW && prevState == HIGH) {
+        /* Debounce delay */
+        sleeper.tv_sec = 0;
+        sleeper.tv_nsec = 50 * 1000000; /* 50ms */
+        nanosleep(&sleeper, &dummy);
+        
+        /* Check if button is still released */
+        currState = readButton(gpio, button);
+        if (currState == LOW) {
+            prevState = LOW;
+            return 1; /* Button release detected */
+        }
+    } else if (currState == HIGH && prevState == LOW) {
+        /* Button was pressed */
+        prevState = HIGH;
+    }
+    
+    return 0; /* No new button release */
+}
+
+/* 
+ * Get input value using button presses
+ * Returns: selected value (1 to maxValue)
+ * Parameters:
+ *   gpio - GPIO base address
+ *   button - Button pin number
+ *   maxValue - Maximum value to cycle through
+ *   timeoutSec - Timeout in seconds (0 for no timeout)
+ *   confirmMethod - How to confirm selection:
+ *     0 = timeout only
+ *     1 = long press (hold for 1 second)
+ *     2 = double press (press twice within 1 second)
+ */
+int getButtonInput(uint32_t *gpio, int button, int maxValue, int timeoutSec, int confirmMethod)
+{
+    int value = 1; /* Start with value 1 */
+    int confirmed = 0;
+    time_t startTime = time(NULL);
+    time_t currentTime;
+    time_t lastPressTime = 0;
+    int pressCount = 0;
+    int longPressDetected = 0;
+    struct timespec sleeper, dummy;
+    
+    /* Reset button state */
+    while (readButton(gpio, button) == HIGH) {
+        sleeper.tv_sec = 0;
+        sleeper.tv_nsec = 10 * 1000000;
+        nanosleep(&sleeper, &dummy);
+    }
+    
+    while (!confirmed) {
+        currentTime = time(NULL);
+        
+        /* Check for timeout */
+        if (timeoutSec > 0 && (currentTime - startTime) >= timeoutSec) {
+            return value; /* Return current value on timeout */
+        }
+        
+        /* Check for button press */
+        if (detectButtonPress(gpio, button)) {
+            /* Button was pressed, increment value */
+            value = (value % maxValue) + 1;
+            
+            /* Reset timeout on button press */
+            startTime = time(NULL);
+            
+            /* For double-press detection */
+            if (confirmMethod == 2) {
+                if (pressCount == 0 || (currentTime - lastPressTime) > 1) {
+                    /* First press or too much time passed */
+                    pressCount = 1;
+                } else {
+                    /* Second press within 1 second */
+                    pressCount++;
+                }
+                lastPressTime = currentTime;
+            }
+            
+            /* Wait for button release with long-press detection */
+            time_t pressStartTime = time(NULL);
+            while (readButton(gpio, button) == HIGH) {
+                /* For long-press detection */
+                if (confirmMethod == 1 && (time(NULL) - pressStartTime) >= 1) {
+                    longPressDetected = 1;
+                }
+                
+                sleeper.tv_sec = 0;
+                sleeper.tv_nsec = 10 * 1000000;
+                nanosleep(&sleeper, &dummy);
+            }
+            
+            /* Handle confirmation methods */
+            if (confirmMethod == 1 && longPressDetected) {
+                confirmed = 1; /* Long press confirmation */
+            } else if (confirmMethod == 2 && pressCount >= 2) {
+                confirmed = 1; /* Double press confirmation */
+            }
+        }
+        
+        /* Small delay to prevent CPU hogging */
+        sleeper.tv_sec = 0;
+        sleeper.tv_nsec = 10 * 1000000;
+        nanosleep(&sleeper, &dummy);
+    }
+    
+    return value;
+}
+
 /* Wait for a button press with debouncing */
 void waitForButton(uint32_t *gpio, int button)
 {

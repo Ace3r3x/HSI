@@ -22,6 +22,9 @@
 #include <sys/ioctl.h>
 #include <signal.h>
 
+#include "lcdBinary.h"
+
+
 /* --------------------------------------------------------------------------- */
 /* Config settings */
 #define DEBUG
@@ -143,134 +146,6 @@ void waitForEnter(void);
 void waitForButton(uint32_t *gpio, int button);
 void cleanupResources(void);
 
-/* ======================================================= */
-/* SECTION: hardware interface (LED, button, LCD display)  */
-/* ------------------------------------------------------- */
-/* low-level interface to the hardware */
-
-/* send a @value@ (LOW or HIGH) on pin number @pin@; @gpio@ is the mmaped GPIO base address */
-void digitalWrite(uint32_t *gpio, int pin, int value)
-{
-    int offset = pin / 32;
-    int shift = pin % 32;
-    
-    if (value == LOW) {
-        /* Use GPCLR register to clear the pin */
-        asm volatile (
-            "mov r3, #1 \n\t"
-            "lsl r3, r3, %[shift] \n\t"
-            "str r3, [%[gpio], #40] \n\t"
-            :
-            : [gpio] "r" (gpio + offset), [shift] "r" (shift)
-            : "r3"
-        );
-    } else {
-        /* Use GPSET register to set the pin */
-        asm volatile (
-            "mov r3, #1 \n\t"
-            "lsl r3, r3, %[shift] \n\t"
-            "str r3, [%[gpio], #28] \n\t"
-            :
-            : [gpio] "r" (gpio + offset), [shift] "r" (shift)
-            : "r3"
-        );
-    }
-}
-
-/* set the @mode@ of a GPIO @pin@ to INPUT or OUTPUT; @gpio@ is the mmaped GPIO base address */
-void pinMode(uint32_t *gpio, int pin, int mode)
-{
-    int fSel = pin / 10;
-    int shift = (pin % 10) * 3;
-    
-    asm volatile (
-        /* Read current value of the GPFSEL register */
-        "ldr r3, [%[gpio], %[fSel], lsl #2] \n\t"
-        
-        /* Clear the 3 bits for this pin */
-        "mov r2, #7 \n\t"                      /* 7 = 0b111 */
-        "lsl r2, r2, %[shift] \n\t"            /* Shift to pin position */
-        "bic r3, r3, r2 \n\t"                  /* Clear the 3 bits */
-        
-        /* Set the mode bits */
-        "mov r2, %[mode] \n\t"                 /* Get mode value */
-        "lsl r2, r2, %[shift] \n\t"            /* Shift to pin position */
-        "orr r3, r3, r2 \n\t"                  /* Set the bits */
-        
-        /* Write back to the GPFSEL register */
-        "str r3, [%[gpio], %[fSel], lsl #2] \n\t"
-        :
-        : [gpio] "r" (gpio), [fSel] "r" (fSel), [shift] "r" (shift), [mode] "r" (mode)
-        : "r2", "r3", "cc"
-    );
-}
-
-/* send a @value@ (LOW or HIGH) on pin number @pin@; @gpio@ is the mmaped GPIO base address */
-void writeLED(uint32_t *gpio, int led, int value)
-{
-    /* Set the pin as OUTPUT */
-    pinMode(gpio, led, OUTPUT);
-    
-    /* Set the pin value */
-    digitalWrite(gpio, led, value);
-}
-
-/* read a @value@ (LOW or HIGH) from pin number @pin@ (a button device); @gpio@ is the mmaped GPIO base address */
-int readButton(uint32_t *gpio, int button)
-{
-    int result;
-    int offset = button / 32;
-    int shift = button % 32;
-    
-    /* Set the pin as INPUT */
-    pinMode(gpio, button, INPUT);
-    
-    /* Read the pin value from GPLEV register */
-    asm volatile (
-        "mov r3, #1 \n\t"
-        "lsl r3, r3, %[shift] \n\t"
-        "ldr r2, [%[gpio], #52] \n\t"          /* Read GPLEV0 register */
-        "and r2, r2, r3 \n\t"                  /* Mask with button bit */
-        "cmp r2, #0 \n\t"                      /* Compare with 0 */
-        "moveq %[result], #0 \n\t"             /* If 0, button is not pressed */
-        "movne %[result], #1 \n\t"             /* If not 0, button is pressed */
-        : [result] "=r" (result)
-        : [gpio] "r" (gpio + offset), [shift] "r" (shift)
-        : "r2", "r3", "cc"
-    );
-    
-    return result;
-}
-
-/* wait for a button input on pin number @button@; @gpio@ is the mmaped GPIO base address */
-void waitForButton(uint32_t *gpio, int button)
-{
-    int prevState = 0;
-    int currState;
-    int debounceTime = 50; /* milliseconds */
-    
-    while (1) {
-        currState = readButton(gpio, button);
-        
-        /* If button state changed from not pressed to pressed */
-        if (currState == HIGH && prevState == LOW) {
-            delay(debounceTime); /* Debounce delay */
-            
-            /* Check if button is still pressed */
-            currState = readButton(gpio, button);
-            if (currState == HIGH) {
-                /* Wait for button release */
-                while (readButton(gpio, button) == HIGH) {
-                    delay(10);
-                }
-                break;
-            }
-        }
-        
-        prevState = currState;
-        delay(10); /* Small polling delay */
-    }
-}
 
 /* ======================================================= */
 /* SECTION: game logic                                     */
@@ -1046,97 +921,33 @@ int main(int argc, char *argv[])
         delay(2000);
         
         // Get input for each position in the sequence
-        for (i = 0; i < seqlen; i++) {
-            lcdClear(lcd);
-            lcdPuts(lcd, "Position ");
-            sprintf(buf, "%d", i + 1);
-            lcdPuts(lcd, buf);
-            lcdPosition(lcd, 0, 1);
-            lcdPuts(lcd, "Press button");
-            
-            // Wait for button presses to select a color
-            int buttonCount = 0;
-            int confirmed = 0;
-            time_t startTime = time(NULL);
-            time_t endTime = startTime + INPUT_TIMEOUT; // Time window for input
-            
-            while (time(NULL) < endTime && !confirmed) {
-                // Visual indicator - blink green LED
-                writeLED(gpio, pinLED, HIGH);
-                delay(100);
-                writeLED(gpio, pinLED, LOW);
-                delay(100);
-                
-                // Check for button press with improved debouncing
-                int buttonState = readButton(gpio, pinButton);
-                static int lastButtonState = LOW;
-                
-                if (buttonState == HIGH && lastButtonState == LOW) {
-                    // Button pressed, increment count
-                    buttonCount = (buttonCount % colors) + 1;
-                    
-                    // Show current selection on LCD
-                    lcdPosition(lcd, 10, 1);
-                    sprintf(buf, "Val: %d", buttonCount);
-                    lcdPuts(lcd, buf);
-                    
-                    // Visual feedback - blink red LED
-                    writeLED(gpio, pin2LED2, HIGH);
-                    delay(200);
-                    writeLED(gpio, pin2LED2, LOW);
-                    
-                    // Wait for button release with debouncing
-                    delay(50);
-                    while (readButton(gpio, pinButton) == HIGH) {
-                        delay(10);
-                    }
-                    delay(50);
-                    
-                    // Reset timer to give more time after a button press
-                    endTime = time(NULL) + INPUT_TIMEOUT;
-                }
-                
-                lastButtonState = buttonState;
-                
-                // Check for double-press to confirm (within 1 second)
-                if (buttonCount > 0) {
-                    for (j = 0; j < 10 && !confirmed; j++) {
-                        delay(100);
-                        buttonState = readButton(gpio, pinButton);
-                        
-                        if (buttonState == HIGH && lastButtonState == LOW) {
-                            confirmed = 1;
-                            
-                            // Visual confirmation - double blink green LED
-                            blinkN(gpio, pinLED, 2);
-                            
-                            // Wait for button release
-                            while (readButton(gpio, pinButton) == HIGH) {
-                                delay(10);
-                            }
-                            break;
-                        }
-                        
-                        lastButtonState = buttonState;
-                    }
-                }
-            }
-            
-            // If time expired or not confirmed, use the last value
-            if (buttonCount == 0) {
-                buttonCount = 1; // Default to 1 if no button press
-            }
-            
-            // Store the value
-            attSeq[i] = buttonCount;
-            
-            // Show the selected value
-            lcdClear(lcd);
-            lcdPuts(lcd, "Position ");
-            sprintf(buf, "%d: %d", i + 1, attSeq[i]);
-            lcdPuts(lcd, buf);
-            delay(1000);
-        }
+for (i = 0; i < seqlen; i++) {
+    lcdClear(lcd);
+    lcdPuts(lcd, "Position ");
+    sprintf(buf, "%d", i + 1);
+    lcdPuts(lcd, buf);
+    lcdPosition(lcd, 0, 1);
+    lcdPuts(lcd, "Press button");
+    
+    // Use the new function to get input
+    // Parameters: gpio, button pin, max value (colors), timeout, confirmation method (2 = double press)
+    int selectedValue = getButtonInput(gpio, pinButton, colors, INPUT_TIMEOUT, 2);
+    
+    // Visual feedback for the selected value
+    writeLED(gpio, pinLED, HIGH);
+    delay(200);
+    writeLED(gpio, pinLED, LOW);
+    
+    // Store the value
+    attSeq[i] = selectedValue;
+    
+    // Show the selected value
+    lcdClear(lcd);
+    lcdPuts(lcd, "Position ");
+    sprintf(buf, "%d: %d", i + 1, attSeq[i]);
+    lcdPuts(lcd, buf);
+    delay(1000);
+}
         
         // Display the entered sequence
         if (debug) {

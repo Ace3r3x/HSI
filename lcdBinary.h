@@ -37,4 +37,10 @@ void writeLED(uint32_t *gpio, int led, int value);
 int readButton(uint32_t *gpio, int button);
 void waitForButton(uint32_t *gpio, int button);
 
+// New button handling functions
+int detectButtonPress(uint32_t *gpio, int button);
+int detectButtonRelease(uint32_t *gpio, int button);
+int getButtonInput(uint32_t *gpio, int button, int maxValue, int timeoutSec, int confirmMethod);
+void delay(unsigned int howLong);
+
 #endif /* LCD_BINARY_H */

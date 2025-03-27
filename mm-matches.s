@@ -1,35 +1,10 @@
 @ This ARM Assembler code implements a matching function for the MasterMind game.
 @ It counts exact matches (right color in right position) and approximate matches
 @ (right color but wrong position), ensuring each peg is counted only once.
-	
-@ Example (first sequence is secret, second sequence is guess):
-@ 1 2 1
-@ 3 1 3 ==> 0 1 (0 exact matches, 1 approximate match)
-@
-@ -----------------------------------------------------------------------------
 
 .text
-@ this is the matching fct that should be called from the C part of the CW	
-.global         matches
-@ use the name `main` here, for standalone testing of the assembler code
-.global         main
-
-@ -----------------------------------------------------------------------------
-@ Main function for standalone testing
-main: 
-    LDR  R0, =secret    @ Load address of secret sequence
-    LDR  R1, =guess     @ Load address of guess sequence
-    BL   matches        @ Call the matching function
-    
-    @ Display the result
-    MOV  R1, R0         @ Move result to R1 for printing
-    LDR  R0, =result_str @ Load format string
-    BL   printf         @ Call printf
-    
-exit:
-    MOV  R7, #1         @ syscall number for exit
-    MOV  R0, #0         @ exit code 0
-    SWI  0              @ software interrupt
+@ This is the matching function that should be called from the C part of the CW
+.global matches
 
 @ -----------------------------------------------------------------------------
 @ matches function - compares two sequences and returns exact and approximate matches
@@ -61,8 +36,8 @@ matches:
     @ First pass: Find exact matches
     MOV  R8, #0         @ R8 = loop counter (i)
 exact_loop:
-    CMP  R8, #LEN       @ Compare i with sequence length
-    BGE  exact_done     @ If i >= LEN, exit loop
+    CMP  R8, #3         @ Compare i with sequence length (3)
+    BGE  exact_done     @ If i >= 3, exit loop
     
     @ Load secret[i] and guess[i]
     LSL  R9, R8, #2     @ R9 = i * 4 (word size)
@@ -89,8 +64,8 @@ exact_done:
     @ Second pass: Find approximate matches
     MOV  R8, #0         @ R8 = outer loop counter (i)
 approx_outer_loop:
-    CMP  R8, #LEN       @ Compare i with sequence length
-    BGE  approx_done    @ If i >= LEN, exit loop
+    CMP  R8, #3         @ Compare i with sequence length (3)
+    BGE  approx_done    @ If i >= 3, exit loop
     
     @ Check if secret[i] is already used
     LSL  R9, R8, #2     @ R9 = i * 4
@@ -101,8 +76,8 @@ approx_outer_loop:
     @ Inner loop: check all positions in guess
     MOV  R10, #0        @ R10 = inner loop counter (j)
 approx_inner_loop:
-    CMP  R10, #LEN      @ Compare j with sequence length
-    BGE  next_outer     @ If j >= LEN, exit inner loop
+    CMP  R10, #3        @ Compare j with sequence length (3)
+    BGE  next_outer     @ If j >= 3, exit inner loop
     
     @ Check if guess[j] is already used
     LSL  R11, R10, #2   @ R11 = j * 4
@@ -138,62 +113,21 @@ next_outer:
 approx_done:
     @ Calculate final result: exact*10 + approximate
     MOV  R0, R4         @ R0 = exact matches
-    MOV  R1, #10        @ R1 = 10
-    MUL  R0, R0, R1     @ R0 = exact * 10
+    MOV  R3, #10        @ R3 = 10 (use R3 instead of R1 to avoid register conflict)
+    MUL  R0, R0, R3     @ R0 = exact * 10
     ADD  R0, R0, R5     @ R0 = (exact * 10) + approximate
     
     @ Clean up and return
     ADD  SP, SP, #24    @ Deallocate stack space
     POP  {R4-R11, PC}   @ Restore registers and return
-    
-@ -----------------------------------------------------------------------------
-@ showseq - displays a sequence for debugging
-@ Input: R0 = pointer to a sequence of 3 int values to show
-showseq:
-    PUSH {R0-R3, LR}    @ Save registers
-    
-    @ Load the three values from the sequence
-    LDR  R1, [R0]       @ R1 = seq[0]
-    LDR  R2, [R0, #4]   @ R2 = seq[1]
-    LDR  R3, [R0, #8]   @ R3 = seq[2]
-    
-    @ Call printf with format string and values
-    LDR  R0, =f4str     @ R0 = format string
-    BL   printf         @ Call printf
-    
-    POP  {R0-R3, PC}    @ Restore registers and return
-    
+
 @ =============================================================================
-
 .data
-
 @ Constants about the basic setup of the game
 .equ LEN, 3             @ Length of sequence
 .equ COL, 3             @ Number of colors
 .equ NAN1, 8            @ Not-a-number value 1
 .equ NAN2, 9            @ Not-a-number value 2
 
-@ Format strings for output
-f4str:      .asciz "Seq:    %d %d %d\n"
-result_str: .asciz "Result: %d (exact=%d, approx=%d)\n"
-
 @ Memory location for temporary storage
 n: .word 0x00
-	
-@ Test case 1: Expect 0 exact, 1 approximate
-.align 4
-secret: .word 1, 2, 1    @ Secret sequence: 1 2 1
-guess:  .word 3, 1, 3    @ Guess sequence:  3 1 3
-expect: .byte 0, 1       @ Expected result: 0 exact, 1 approximate
-
-@ Test case 2: Expect 1 exact, 1 approximate
-.align 4
-secret1: .word 1, 2, 3   @ Secret sequence: 1 2 3
-guess1:  .word 1, 1, 2   @ Guess sequence:  1 1 2
-expect1: .byte 1, 1      @ Expected result: 1 exact, 1 approximate
-
-@ Test case 3: Expect 1 exact, 0 approximate
-.align 4
-secret2: .word 2, 3, 2   @ Secret sequence: 2 3 2
-guess2:  .word 3, 3, 1   @ Guess sequence:  3 3 1
-expect2: .byte 1, 0      @ Expected result: 1 exact, 0 approximate
