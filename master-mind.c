@@ -1,7 +1,4 @@
-/*
- * MasterMind implementation for Raspberry Pi
- * Combines the best parts of both implementations
- */
+/* MasterMind implementation for Raspberry Pi */
 
 /* ======================================================= */
 /* SECTION: includes                                       */
@@ -41,6 +38,7 @@
 // delay for loop iterations (mainly), in ms
 #define DELAY 200   // in mili-seconds: 0.2s
 #define TIMEOUT 3000000  // in micro-seconds: 3s
+#define INPUT_TIMEOUT 5  // in seconds: time window for button input
 
 // =======================================================
 // APP constants
@@ -86,8 +84,11 @@ static unsigned char newChar[8] = {
 /* Constants */
 static const int colors = COLS;
 static const int seqlen = SEQL;
+
 static char *color_names[] = {"red", "green", "blue"};
+
 static int* theSeq = NULL;
+
 static int *seq1, *seq2, *cpy1, *cpy2;
 
 /* --------------------------------------------------------------------------- */
@@ -132,6 +133,7 @@ static int lcdControl;
 
 static unsigned int gpiobase;
 static uint32_t *gpio;
+
 static int timed_out = 0;
 
 /* ------------------------------------------------------- */
@@ -144,8 +146,9 @@ void cleanupResources(void);
 /* ======================================================= */
 /* SECTION: hardware interface (LED, button, LCD display)  */
 /* ------------------------------------------------------- */
+/* low-level interface to the hardware */
 
-/* Send a value (LOW or HIGH) to a GPIO pin */
+/* send a @value@ (LOW or HIGH) on pin number @pin@; @gpio@ is the mmaped GPIO base address */
 void digitalWrite(uint32_t *gpio, int pin, int value)
 {
     int offset = pin / 32;
@@ -174,7 +177,7 @@ void digitalWrite(uint32_t *gpio, int pin, int value)
     }
 }
 
-/* Set a GPIO pin mode to INPUT or OUTPUT */
+/* set the @mode@ of a GPIO @pin@ to INPUT or OUTPUT; @gpio@ is the mmaped GPIO base address */
 void pinMode(uint32_t *gpio, int pin, int mode)
 {
     int fSel = pin / 10;
@@ -202,7 +205,7 @@ void pinMode(uint32_t *gpio, int pin, int mode)
     );
 }
 
-/* Control an LED */
+/* send a @value@ (LOW or HIGH) on pin number @pin@; @gpio@ is the mmaped GPIO base address */
 void writeLED(uint32_t *gpio, int led, int value)
 {
     /* Set the pin as OUTPUT */
@@ -212,7 +215,7 @@ void writeLED(uint32_t *gpio, int led, int value)
     digitalWrite(gpio, led, value);
 }
 
-/* Read the state of a button */
+/* read a @value@ (LOW or HIGH) from pin number @pin@ (a button device); @gpio@ is the mmaped GPIO base address */
 int readButton(uint32_t *gpio, int button)
 {
     int result;
@@ -239,7 +242,7 @@ int readButton(uint32_t *gpio, int button)
     return result;
 }
 
-/* Wait for a button press with debouncing */
+/* wait for a button input on pin number @button@; @gpio@ is the mmaped GPIO base address */
 void waitForButton(uint32_t *gpio, int button)
 {
     int prevState = 0;
@@ -272,8 +275,9 @@ void waitForButton(uint32_t *gpio, int button)
 /* ======================================================= */
 /* SECTION: game logic                                     */
 /* ------------------------------------------------------- */
+/* AUX fcts of the game logic */
 
-/* Initialize the secret sequence with random values */
+/* initialise the secret sequence; by default it should be a random sequence */
 void initSeq()
 {
     int i;
@@ -296,7 +300,7 @@ void initSeq()
     }
 }
 
-/* Display the sequence on the terminal */
+/* display the sequence on the terminal window, using the format from the sample run in the spec */
 void showSeq(int *seq)
 {
     int i;
@@ -311,7 +315,8 @@ void showSeq(int *seq)
 #define NAN1 8
 #define NAN2 9
 
-/* Count exact and approximate matches between two sequences */
+/* counts how many entries in seq2 match entries in seq1 */
+/* returns exact and approximate matches, encoded in a single value */
 int countMatches(int *seq1, int *seq2)
 {
     int i, j;
@@ -365,7 +370,7 @@ int countMatches(int *seq1, int *seq2)
     return (exact * 10) + approx;
 }
 
-/* Show the results from calling countMatches */
+/* show the results from calling countMatches on seq1 and seq1 */
 void showMatches(int code, int *seq1, int *seq2, int lcd_format)
 {
     int exact = code / 10;
@@ -381,7 +386,8 @@ void showMatches(int code, int *seq1, int *seq2, int lcd_format)
     }
 }
 
-/* Parse an integer value as a list of digits */
+/* parse an integer value as a list of digits, and put them into @seq@ */
+/* needed for processing command-line with options -s or -u            */
 void readSeq(int *seq, int val)
 {
     int i;
@@ -405,7 +411,8 @@ void readSeq(int *seq, int val)
     }
 }
 
-/* Read a guess sequence from stdin */
+/* read a guess sequence from stdin and store the values in arr */
+/* only needed for testing the game logic, without button input */
 int readNum(int max)
 {
     int i;
@@ -440,6 +447,7 @@ int readNum(int max)
 /* ======================================================= */
 /* SECTION: TIMER code                                     */
 /* ------------------------------------------------------- */
+/* TIMER code */
 
 /* timestamps needed to implement a time-out mechanism */
 static uint64_t startT, stopT;
@@ -498,7 +506,7 @@ void initITimer(uint64_t timeout)
 /* ======================================================= */
 /* SECTION: Aux function                                   */
 /* ------------------------------------------------------- */
-
+/* misc aux functions */
 int failure(int fatal, const char *message, ...)
 {
     va_list argp;
@@ -583,23 +591,10 @@ void cleanupResources(void)
     }
 }
 
-/* Blink the LED n times */
-void blinkN(uint32_t *gpio, int led, int c)
-{
-    int i;
-    
-    for (i = 0; i < c; i++) {
-        writeLED(gpio, led, HIGH);
-        delay(DELAY);
-        writeLED(gpio, led, LOW);
-        delay(DELAY);
-    }
-}
-
 /* ======================================================= */
 /* SECTION: LCD functions                                  */
 /* ------------------------------------------------------- */
-
+/* medium-level interface functions (all in C) */
 void strobe(const struct lcdDataStruct *lcd)
 {
     digitalWrite(gpio, lcd->strbPin, 1);
@@ -744,9 +739,26 @@ void lcdPuts(struct lcdDataStruct *lcd, const char *string)
 }
 
 /* ======================================================= */
-/* SECTION: main function                                  */
+/* SECTION: aux functions for game logic                   */
 /* ------------------------------------------------------- */
+/* interface on top of the low-level pin I/O code */
 
+/* blink the led on pin @led@, @c@ times */
+void blinkN(uint32_t *gpio, int led, int c)
+{
+    int i;
+    
+    for (i = 0; i < c; i++) {
+        writeLED(gpio, led, HIGH);
+        delay(DELAY);
+        writeLED(gpio, led, LOW);
+        delay(DELAY);
+    }
+}
+
+/* ======================================================= */
+/* SECTION: main fct                                       */
+/* ------------------------------------------------------- */
 int main(int argc, char *argv[])
 {
     struct lcdDataStruct *lcd;
@@ -1020,8 +1032,6 @@ int main(int argc, char *argv[])
     
     // Main game loop - player has MAX_ATTEMPTS attempts to guess the sequence
     while (!found && attempts < MAX_ATTEMPTS) {
-        int turn = 0;
-        
         // Clear LCD for new attempt
         lcdClear(lcd);
         
@@ -1048,7 +1058,7 @@ int main(int argc, char *argv[])
             int buttonCount = 0;
             int confirmed = 0;
             time_t startTime = time(NULL);
-            time_t endTime = startTime + 5; // 5 second window
+            time_t endTime = startTime + INPUT_TIMEOUT; // Time window for input
             
             while (time(NULL) < endTime && !confirmed) {
                 // Visual indicator - blink green LED
@@ -1083,7 +1093,7 @@ int main(int argc, char *argv[])
                     delay(50);
                     
                     // Reset timer to give more time after a button press
-                    endTime = time(NULL) + 5;
+                    endTime = time(NULL) + INPUT_TIMEOUT;
                 }
                 
                 lastButtonState = buttonState;

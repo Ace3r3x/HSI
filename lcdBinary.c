@@ -1,75 +1,140 @@
-/* ***************************************************************************** */
-/* You can use this file to define the low-level hardware control fcts for       */
-/* LED, button and LCD devices.                                                  */ 
-/* Note that these need to be implemented in Assembler.                          */
-/* You can use inline Assembler code, or use a stand-alone Assembler file.       */
-/* Alternatively, you can implement all fcts directly in master-mind.c,          */  
-/* using inline Assembler code there.                                            */
-/* The Makefile assumes you define the functions here.                           */
-/* ***************************************************************************** */
+#include "lcdBinary.h"
 
+/* 
+ * Low-level hardware control functions for Raspberry Pi
+ * Implemented using inline assembly
+ */
 
-#ifndef	TRUE
-#  define	TRUE	(1==1)
-#  define	FALSE	(1==2)
-#endif
-
-#define	PAGE_SIZE		(4*1024)
-#define	BLOCK_SIZE		(4*1024)
-
-#define	INPUT			 0
-#define	OUTPUT			 1
-
-#define	LOW			 0
-#define	HIGH			 1
-
-
-// APP constants   ---------------------------------
-
-// Wiring (see call to lcdInit in main, using BCM numbering)
-// NB: this needs to match the wiring as defined in master-mind.c
-
-#define STRB_PIN 24
-#define RS_PIN   25
-#define DATA0_PIN 23
-#define DATA1_PIN 10
-#define DATA2_PIN 27
-#define DATA3_PIN 22
-
-// -----------------------------------------------------------------------------
-// includes 
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdint.h>
-#include <sys/types.h>
-#include <time.h>
-
-// -----------------------------------------------------------------------------
-// prototypes
-
-int failure (int fatal, const char *message, ...);
-
-// -----------------------------------------------------------------------------
-// Functions to implement here (or directly in master-mind.c)
-
-/* this version needs gpio as argument, because it is in a separate file */
-void digitalWrite (uint32_t *gpio, int pin, int value) {
-  /* ***  COMPLETE the code here, using inline Assembler  ***  */
+/* Send a value (LOW or HIGH) to a GPIO pin */
+void digitalWrite(uint32_t *gpio, int pin, int value)
+{
+    int offset = pin / 32;
+    int shift = pin % 32;
+    
+    if (value == LOW) {
+        /* Use GPCLR register to clear the pin */
+        asm volatile (
+            "mov r3, #1 \n\t"
+            "lsl r3, r3, %[shift] \n\t"
+            "str r3, [%[gpio], #40] \n\t"
+            :
+            : [gpio] "r" (gpio + offset), [shift] "r" (shift)
+            : "r3"
+        );
+    } else {
+        /* Use GPSET register to set the pin */
+        asm volatile (
+            "mov r3, #1 \n\t"
+            "lsl r3, r3, %[shift] \n\t"
+            "str r3, [%[gpio], #28] \n\t"
+            :
+            : [gpio] "r" (gpio + offset), [shift] "r" (shift)
+            : "r3"
+        );
+    }
 }
 
-// adapted from setPinMode
-void pinMode(uint32_t *gpio, int pin, int mode /*, int fSel, int shift */) {
-  /* ***  COMPLETE the code here, using inline Assembler  ***  */
+/* Set the mode of a GPIO pin to INPUT or OUTPUT */
+void pinMode(uint32_t *gpio, int pin, int mode)
+{
+    int fSel = pin / 10;
+    int shift = (pin % 10) * 3;
+    
+    asm volatile (
+        /* Read current value of the GPFSEL register */
+        "ldr r3, [%[gpio], %[fSel], lsl #2] \n\t"
+        
+        /* Clear the 3 bits for this pin */
+        "mov r2, #7 \n\t"                      /* 7 = 0b111 */
+        "lsl r2, r2, %[shift] \n\t"            /* Shift to pin position */
+        "bic r3, r3, r2 \n\t"                  /* Clear the 3 bits */
+        
+        /* Set the mode bits */
+        "mov r2, %[mode] \n\t"                 /* Get mode value */
+        "lsl r2, r2, %[shift] \n\t"            /* Shift to pin position */
+        "orr r3, r3, r2 \n\t"                  /* Set the bits */
+        
+        /* Write back to the GPFSEL register */
+        "str r3, [%[gpio], %[fSel], lsl #2] \n\t"
+        :
+        : [gpio] "r" (gpio), [fSel] "r" (fSel), [shift] "r" (shift), [mode] "r" (mode)
+        : "r2", "r3", "cc"
+    );
 }
 
-void writeLED(uint32_t *gpio, int led, int value) {
-  /* ***  COMPLETE the code here, using inline Assembler  ***  */
+/* Control an LED connected to a GPIO pin */
+void writeLED(uint32_t *gpio, int led, int value)
+{
+    /* Set the pin as OUTPUT */
+    pinMode(gpio, led, OUTPUT);
+    
+    /* Set the pin value */
+    digitalWrite(gpio, led, value);
 }
 
-int readButton(uint32_t *gpio, int button) {
-  /* ***  COMPLETE the code here, using inline Assembler  ***  */
+/* Read the state of a button connected to a GPIO pin */
+int readButton(uint32_t *gpio, int button)
+{
+    int result;
+    int offset = button / 32;
+    int shift = button % 32;
+    
+    /* Set the pin as INPUT */
+    pinMode(gpio, button, INPUT);
+    
+    /* Read the pin value from GPLEV register */
+    asm volatile (
+        "mov r3, #1 \n\t"
+        "lsl r3, r3, %[shift] \n\t"
+        "ldr r2, [%[gpio], #52] \n\t"          /* Read GPLEV0 register */
+        "and r2, r2, r3 \n\t"                  /* Mask with button bit */
+        "cmp r2, #0 \n\t"                      /* Compare with 0 */
+        "moveq %[result], #0 \n\t"             /* If 0, button is not pressed */
+        "movne %[result], #1 \n\t"             /* If not 0, button is pressed */
+        : [result] "=r" (result)
+        : [gpio] "r" (gpio + offset), [shift] "r" (shift)
+        : "r2", "r3", "cc"
+    );
+    
+    return result;
 }
 
-void waitForButton(uint32_t *gpio, int button) {
-  /* ***  COMPLETE the code here, just C no Assembler; you can use readButton ***  */
+/* Wait for a button press with debouncing */
+void waitForButton(uint32_t *gpio, int button)
+{
+    int prevState = 0;
+    int currState;
+    int debounceTime = 50; /* milliseconds */
+    struct timespec sleeper, dummy;
+    
+    while (1) {
+        currState = readButton(gpio, button);
+        
+        /* If button state changed from not pressed to pressed */
+        if (currState == HIGH && prevState == LOW) {
+            /* Debounce delay */
+            sleeper.tv_sec = 0;
+            sleeper.tv_nsec = debounceTime * 1000000;
+            nanosleep(&sleeper, &dummy);
+            
+            /* Check if button is still pressed */
+            currState = readButton(gpio, button);
+            if (currState == HIGH) {
+                /* Wait for button release */
+                while (readButton(gpio, button) == HIGH) {
+                    sleeper.tv_sec = 0;
+                    sleeper.tv_nsec = 10 * 1000000;
+                    nanosleep(&sleeper, &dummy);
+                }
+                break;
+            }
+        }
+        
+        prevState = currState;
+        
+        /* Small polling delay */
+        sleeper.tv_sec = 0;
+        sleeper.tv_nsec = 10 * 1000000;
+        nanosleep(&sleeper, &dummy);
+    }
 }
