@@ -1,6 +1,15 @@
-@ This ARM Assembler code implements a matching function for the MasterMind game.
-@ It counts exact matches (right color in right position) and approximate matches
-@ (right color but wrong position), ensuring each peg is counted only once.
+@ This ARM Assembler code should implement a matching function, for use in the MasterMind program, as
+@ described in the CW2 specification. It should produce as output 2 numbers, the first for the
+@ exact matches (peg of right colour and in right position) and approximate matches (peg of right
+@ color but not in right position). Make sure to count each peg just once!
+	
+@ Example (first sequence is secret, second sequence is guess):
+@ 1 2 1
+@ 3 1 3 ==> 0 1
+@ You can return the result as a pointer to two numbers, or two values
+@ encoded within one number
+@
+@ -----------------------------------------------------------------------------
 
 .text
 @ This is the matching function that should be called from the C part of the CW

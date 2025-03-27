@@ -1,13 +1,16 @@
+/* ***************************************************************************** */
+/* Low-level hardware control functions for Raspberry Pi                         */
+/* Implements GPIO control for LEDs, buttons and LCD devices                     */
+/* Uses inline ARM assembly for direct hardware access                           */
+/* ***************************************************************************** */
+
 #include "lcdBinary.h"
 
-/* 
- * Low-level hardware control functions for Raspberry Pi
- * Implemented using inline assembly
- */
+// -----------------------------------------------------------------------------
+// GPIO control functions
 
-/* Send a value (LOW or HIGH) to a GPIO pin */
-void digitalWrite(uint32_t *gpio, int pin, int value)
-{
+/* this version needs gpio as argument, because it is in a separate file */
+void digitalWrite(uint32_t *gpio, int pin, int value) {
     int offset = pin / 32;
     int shift = pin % 32;
     
@@ -34,9 +37,8 @@ void digitalWrite(uint32_t *gpio, int pin, int value)
     }
 }
 
-/* Set the mode of a GPIO pin to INPUT or OUTPUT */
-void pinMode(uint32_t *gpio, int pin, int mode)
-{
+// adapted from setPinMode
+void pinMode(uint32_t *gpio, int pin, int mode) {
     int fSel = pin / 10;
     int shift = (pin % 10) * 3;
     
@@ -62,9 +64,7 @@ void pinMode(uint32_t *gpio, int pin, int mode)
     );
 }
 
-/* Control an LED connected to a GPIO pin */
-void writeLED(uint32_t *gpio, int led, int value)
-{
+void writeLED(uint32_t *gpio, int led, int value) {
     /* Set the pin as OUTPUT */
     pinMode(gpio, led, OUTPUT);
     
@@ -72,9 +72,7 @@ void writeLED(uint32_t *gpio, int led, int value)
     digitalWrite(gpio, led, value);
 }
 
-/* Read the state of a button connected to a GPIO pin */
-int readButton(uint32_t *gpio, int button)
-{
+int readButton(uint32_t *gpio, int button) {
     int result;
     int offset = button / 32;
     int shift = button % 32;
@@ -99,8 +97,11 @@ int readButton(uint32_t *gpio, int button)
     return result;
 }
 
-int detectButtonPress(uint32_t *gpio, int button)
-{
+// -----------------------------------------------------------------------------
+// Button handling helper functions
+
+/* Detect a button press with debouncing */
+int detectButtonPress(uint32_t *gpio, int button) {
     static int prevState = LOW;
     int currState = readButton(gpio, button);
     struct timespec sleeper, dummy;
@@ -126,12 +127,8 @@ int detectButtonPress(uint32_t *gpio, int button)
     return 0; /* No new button press */
 }
 
-/* 
- * Detect a button release with debouncing
- * Returns 1 if a new release is detected, 0 otherwise
- */
-int detectButtonRelease(uint32_t *gpio, int button)
-{
+/* Detect a button release with debouncing */
+int detectButtonRelease(uint32_t *gpio, int button) {
     static int prevState = HIGH;
     int currState = readButton(gpio, button);
     struct timespec sleeper, dummy;
@@ -157,21 +154,8 @@ int detectButtonRelease(uint32_t *gpio, int button)
     return 0; /* No new button release */
 }
 
-/* 
- * Get input value using button presses
- * Returns: selected value (1 to maxValue)
- * Parameters:
- *   gpio - GPIO base address
- *   button - Button pin number
- *   maxValue - Maximum value to cycle through
- *   timeoutSec - Timeout in seconds (0 for no timeout)
- *   confirmMethod - How to confirm selection:
- *     0 = timeout only
- *     1 = long press (hold for 1 second)
- *     2 = double press (press twice within 1 second)
- */
-int getButtonInput(uint32_t *gpio, int button, int maxValue, int timeoutSec, int confirmMethod)
-{
+/* Get input value using button presses */
+int getButtonInput(uint32_t *gpio, int button, int maxValue, int timeoutSec, int confirmMethod) {
     int value = 1; /* Start with value 1 */
     int confirmed = 0;
     time_t startTime = time(NULL);
@@ -246,9 +230,8 @@ int getButtonInput(uint32_t *gpio, int button, int maxValue, int timeoutSec, int
     return value;
 }
 
-/* Wait for a button press with debouncing */
-void waitForButton(uint32_t *gpio, int button)
-{
+void waitForButton(uint32_t *gpio, int button) {
+    /* Simple implementation using readButton */
     int prevState = 0;
     int currState;
     int debounceTime = 50; /* milliseconds */
